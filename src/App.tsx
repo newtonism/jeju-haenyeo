@@ -27,7 +27,8 @@ interface ReservationFormState {
   note: string;
 }
 
-const FORMSPREE_ENDPOINT = 'https://formspree.io/f/xvkabgbp';
+const APPS_SCRIPT_ENDPOINT =
+  'https://script.google.com/macros/s/AKfycbwaZh0td9E5nHBI2UOJDNv-OogGyEvTpObddv8wFFTTeJWWQ2c7na2A5VtDeol6wf8a/exec';
 
 const INITIAL_FORM: ReservationFormState = {
   name: '',
@@ -52,9 +53,7 @@ export default function App() {
   const [form, setForm] = useState<ReservationFormState>(INITIAL_FORM);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submittedBooking, setSubmittedBooking] = useState<
-    (ReservationFormState & { bookingCode: string }) | null
-  >(null);
+  const [submitSuccess, setSubmitSuccess] = useState(false);
 
   const filteredEquipment = useMemo(() => {
     if (equipmentFilter === 'all') return EQUIPMENT_ITEMS;
@@ -69,13 +68,23 @@ export default function App() {
     [selectedSeasonId]
   );
 
+  const updateFormField = <K extends keyof ReservationFormState>(
+    key: K,
+    value: ReservationFormState[K]
+  ) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    if (submitSuccess) {
+      setSubmitSuccess(false);
+    }
+  };
+
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
 
     const trimmedName = form.name.trim();
     const trimmedContact = form.contact.trim();
-    const trimmedNote = form.note.trim();
+    const trimmedMessage = form.note.trim();
 
     if (trimmedName.length < 2) {
       setFormError('신청자 성함을 2자 이상 입력해 주세요.');
@@ -95,72 +104,35 @@ export default function App() {
     }
 
     setFormError(null);
+    setSubmitSuccess(false);
     setIsSubmitting(true);
 
-    const codeSuffix = String(Math.floor(1000 + Math.random() * 9000));
-    const bookingCode = `JH-${form.date.replace(/-/g, '').slice(2)}-${codeSuffix}`;
-
-    const payload: Record<string, string> = {
-      _subject: `[제주 해녀 아카이브] 체험 예약 문의 — ${trimmedName} (${bookingCode})`,
-      bookingCode,
+    const payload = {
       name: trimmedName,
       contact: trimmedContact,
       program: form.program,
       date: form.date,
-      guests: `${form.guests}명`,
-      note: trimmedNote || '(없음)',
+      guests: form.guests,
+      message: trimmedMessage,
     };
 
-    if (isEmail) {
-      payload.email = trimmedContact;
-    }
-
     try {
-      const response = await fetch(FORMSPREE_ENDPOINT, {
+      await fetch(APPS_SCRIPT_ENDPOINT, {
         method: 'POST',
+        mode: 'no-cors',
         headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
+          'Content-Type': 'text/plain;charset=utf-8',
         },
         body: JSON.stringify(payload),
       });
 
-      if (!response.ok) {
-        let errorMessage = '예약 문의 전송에 실패했습니다. 잠시 후 다시 시도해 주세요.';
-        try {
-          const data = (await response.json()) as {
-            errors?: Array<{ message?: string }>;
-            error?: string;
-          };
-          const detail = data.errors?.map((item) => item.message).filter(Boolean).join(', ') || data.error;
-          if (detail) {
-            errorMessage = `예약 문의 전송에 실패했습니다 (${detail}).`;
-          }
-        } catch {
-          // Fallback to generic error message if response is not JSON
-        }
-        setFormError(errorMessage);
-        return;
-      }
-
-      setSubmittedBooking({
-        ...form,
-        name: trimmedName,
-        contact: trimmedContact,
-        note: trimmedNote,
-        bookingCode,
-      });
+      setForm(INITIAL_FORM);
+      setSubmitSuccess(true);
     } catch {
       setFormError('네트워크 오류가 발생했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.');
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const handleResetBooking = () => {
-    setSubmittedBooking(null);
-    setForm(INITIAL_FORM);
-    setFormError(null);
   };
 
   return (
@@ -720,7 +692,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Right Column: Validated Interactive Experience Booking Form via Formspree */}
+              {/* Right Column: Validated Interactive Experience Booking Form via Google Apps Script */}
               <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 sm:p-8">
                 <h3 className="font-editorial text-xl font-bold text-slate-900">
                   해녀 문화 체험 · 해설 예약 문의
@@ -730,192 +702,160 @@ export default function App() {
                   안내드리겠습니다.
                 </p>
 
-                {submittedBooking ? (
-                  <div className="mt-6 rounded-lg bg-[#F8FAFC] border border-slate-200 p-6">
-                    <div className="flex items-center gap-2.5 text-[#0E5A6F]">
-                      <CheckCircle2 className="w-5 h-5 shrink-0" aria-hidden="true" />
-                      <h4 className="font-semibold text-base text-slate-900">
-                        예약 문의가 정상 접수되었습니다.
-                      </h4>
+                {submitSuccess && (
+                  <div
+                    role="status"
+                    className="mt-5 flex items-start gap-2.5 rounded-lg border border-[#0E5A6F]/25 bg-[#0E5A6F]/8 p-4 text-sm text-slate-800"
+                  >
+                    <CheckCircle2
+                      className="w-5 h-5 text-[#0E5A6F] shrink-0 mt-0.5"
+                      aria-hidden="true"
+                    />
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-900">
+                        예약 문의가 정상적으로 접수되었습니다.
+                      </p>
+                      <p className="mt-1 text-xs text-slate-600 leading-relaxed">
+                        물때와 기상 상황을 확인한 뒤 남겨주신 연락처로 회신드리겠습니다.
+                      </p>
                     </div>
-                    <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-                      입력하신 내용으로 예약 문의가 정상 전달되었습니다. 물때와 기상 상황을 확인한 뒤
-                      남겨주신 연락처로 회신드리겠습니다.
-                    </p>
-
-                    <dl className="mt-5 pt-4 border-t border-slate-200 space-y-2.5 text-sm">
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">접수 번호</dt>
-                        <dd className="font-mono-tabular font-semibold text-[#0E5A6F]">
-                          {submittedBooking.bookingCode}
-                        </dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">신청자</dt>
-                        <dd className="text-slate-900 font-medium">{submittedBooking.name}</dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">연락처</dt>
-                        <dd className="text-slate-900">{submittedBooking.contact}</dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">프로그램</dt>
-                        <dd className="text-slate-900 font-medium text-right">
-                          {submittedBooking.program}
-                        </dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">방문 일정</dt>
-                        <dd className="font-mono-tabular text-slate-900">
-                          {submittedBooking.date} · {submittedBooking.guests}명
-                        </dd>
-                      </div>
-                    </dl>
-
-                    <button
-                      type="button"
-                      onClick={handleResetBooking}
-                      className="mt-6 w-full py-2.5 px-4 rounded-lg border border-slate-300 hover:bg-slate-100 text-slate-800 text-sm font-medium transition-colors cursor-pointer"
-                    >
-                      새 예약 문의 작성하기
-                    </button>
                   </div>
-                ) : (
-                  <form onSubmit={handleFormSubmit} className="mt-5 space-y-4" noValidate>
+                )}
+
+                <form onSubmit={handleFormSubmit} className="mt-5 space-y-4" noValidate>
+                  <div>
+                    <label htmlFor="booking-name" className="block text-xs font-medium text-slate-700">
+                      신청자 성함
+                    </label>
+                    <input
+                      id="booking-name"
+                      type="text"
+                      required
+                      value={form.name}
+                      onChange={(e) => updateFormField('name', e.target.value)}
+                      placeholder="홍길동"
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-[#0E5A6F]"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="booking-contact"
+                      className="block text-xs font-medium text-slate-700"
+                    >
+                      연락처 또는 이메일
+                    </label>
+                    <input
+                      id="booking-contact"
+                      type="text"
+                      required
+                      value={form.contact}
+                      onChange={(e) => updateFormField('contact', e.target.value)}
+                      placeholder="010-1234-5678 또는 name@example.com"
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-[#0E5A6F]"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="booking-program"
+                      className="block text-xs font-medium text-slate-700"
+                    >
+                      희망 프로그램
+                    </label>
+                    <select
+                      id="booking-program"
+                      value={form.program}
+                      onChange={(e) => updateFormField('program', e.target.value)}
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:outline-2 focus:outline-[#0E5A6F]"
+                    >
+                      <option value="법환 좀녀마을 해녀 물질 체험">
+                        법환 좀녀마을 해녀 물질 체험 (약 90분)
+                      </option>
+                      <option value="제주 해녀박물관 도슨트 단체 해설">
+                        제주 해녀박물관 도슨트 단체 해설 (약 60분)
+                      </option>
+                      <option value="성산일출봉 해녀 공연 및 이야기 마당">
+                        성산일출봉 해녀 공연 및 이야기 마당
+                      </option>
+                      <option value="제주 해녀 밥상 · 계절 식문화 체험">
+                        제주 해녀 밥상 · 계절 식문화 체험
+                      </option>
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label htmlFor="booking-name" className="block text-xs font-medium text-slate-700">
-                        신청자 성함
+                      <label
+                        htmlFor="booking-date"
+                        className="block text-xs font-medium text-slate-700"
+                      >
+                        방문 희망일
                       </label>
                       <input
-                        id="booking-name"
-                        type="text"
+                        id="booking-date"
+                        type="date"
                         required
-                        value={form.name}
-                        onChange={(e) => setForm({ ...form, name: e.target.value })}
-                        placeholder="홍길동"
-                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-[#0E5A6F]"
+                        value={form.date}
+                        onChange={(e) => updateFormField('date', e.target.value)}
+                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 font-mono-tabular focus:outline-2 focus:outline-[#0E5A6F]"
                       />
                     </div>
 
                     <div>
                       <label
-                        htmlFor="booking-contact"
+                        htmlFor="booking-guests"
                         className="block text-xs font-medium text-slate-700"
                       >
-                        연락처 또는 이메일
-                      </label>
-                      <input
-                        id="booking-contact"
-                        type="text"
-                        required
-                        value={form.contact}
-                        onChange={(e) => setForm({ ...form, contact: e.target.value })}
-                        placeholder="010-1234-5678 또는 name@example.com"
-                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-[#0E5A6F]"
-                      />
-                    </div>
-
-                    <div>
-                      <label
-                        htmlFor="booking-program"
-                        className="block text-xs font-medium text-slate-700"
-                      >
-                        희망 프로그램
+                        참여 인원
                       </label>
                       <select
-                        id="booking-program"
-                        value={form.program}
-                        onChange={(e) => setForm({ ...form, program: e.target.value })}
-                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:outline-2 focus:outline-[#0E5A6F]"
+                        id="booking-guests"
+                        value={form.guests}
+                        onChange={(e) => updateFormField('guests', e.target.value)}
+                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 font-mono-tabular focus:outline-2 focus:outline-[#0E5A6F]"
                       >
-                        <option value="법환 좀녀마을 해녀 물질 체험">
-                          법환 좀녀마을 해녀 물질 체험 (약 90분)
-                        </option>
-                        <option value="제주 해녀박물관 도슨트 단체 해설">
-                          제주 해녀박물관 도슨트 단체 해설 (약 60분)
-                        </option>
-                        <option value="성산일출봉 해녀 공연 및 이야기 마당">
-                          성산일출봉 해녀 공연 및 이야기 마당
-                        </option>
-                        <option value="제주 해녀 밥상 · 계절 식문화 체험">
-                          제주 해녀 밥상 · 계절 식문화 체험
-                        </option>
+                        <option value="1">1명</option>
+                        <option value="2">2명</option>
+                        <option value="3">3명</option>
+                        <option value="4">4명</option>
+                        <option value="5~9">5~9명 (소그룹)</option>
+                        <option value="10+">10명 이상 (단체)</option>
                       </select>
                     </div>
+                  </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label
-                          htmlFor="booking-date"
-                          className="block text-xs font-medium text-slate-700"
-                        >
-                          방문 희망일
-                        </label>
-                        <input
-                          id="booking-date"
-                          type="date"
-                          required
-                          value={form.date}
-                          onChange={(e) => setForm({ ...form, date: e.target.value })}
-                          className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 font-mono-tabular focus:outline-2 focus:outline-[#0E5A6F]"
-                        />
-                      </div>
+                  <div>
+                    <label htmlFor="booking-note" className="block text-xs font-medium text-slate-700">
+                      추가 요청 사항 (선택)
+                    </label>
+                    <textarea
+                      id="booking-note"
+                      rows={3}
+                      value={form.note}
+                      onChange={(e) => updateFormField('note', e.target.value)}
+                      placeholder="잠수복 대여 사이즈, 어린이 동반 여부, 외국어 해설 요청 등을 남겨주세요."
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-[#0E5A6F] resize-none"
+                    />
+                  </div>
 
-                      <div>
-                        <label
-                          htmlFor="booking-guests"
-                          className="block text-xs font-medium text-slate-700"
-                        >
-                          참여 인원
-                        </label>
-                        <select
-                          id="booking-guests"
-                          value={form.guests}
-                          onChange={(e) => setForm({ ...form, guests: e.target.value })}
-                          className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 font-mono-tabular focus:outline-2 focus:outline-[#0E5A6F]"
-                        >
-                          <option value="1">1명</option>
-                          <option value="2">2명</option>
-                          <option value="3">3명</option>
-                          <option value="4">4명</option>
-                          <option value="5~9">5~9명 (소그룹)</option>
-                          <option value="10+">10명 이상 (단체)</option>
-                        </select>
-                      </div>
-                    </div>
+                  {formError && (
+                    <p role="alert" className="text-xs font-medium text-red-700 leading-relaxed">
+                      {formError}
+                    </p>
+                  )}
 
-                    <div>
-                      <label htmlFor="booking-note" className="block text-xs font-medium text-slate-700">
-                        추가 요청 사항 (선택)
-                      </label>
-                      <textarea
-                        id="booking-note"
-                        rows={3}
-                        value={form.note}
-                        onChange={(e) => setForm({ ...form, note: e.target.value })}
-                        placeholder="잠수복 대여 사이즈, 어린이 동반 여부, 외국어 해설 요청 등을 남겨주세요."
-                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-[#0E5A6F] resize-none"
-                      />
-                    </div>
-
-                    {formError && (
-                      <p role="alert" className="text-xs font-medium text-red-700 leading-relaxed">
-                        {formError}
-                      </p>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="inline-flex items-center justify-center gap-2 w-full py-3 px-4 rounded-lg bg-[#0E5A6F] hover:bg-[#0b4859] text-white text-sm font-semibold transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {isSubmitting && (
+                      <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
                     )}
-
-                    <button
-                      type="submit"
-                      disabled={isSubmitting}
-                      className="inline-flex items-center justify-center gap-2 w-full py-3 px-4 rounded-lg bg-[#0E5A6F] hover:bg-[#0b4859] text-white text-sm font-semibold transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      {isSubmitting && (
-                        <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                      )}
-                      <span>{isSubmitting ? '발송 중...' : '예약 문의 메일 발송하기'}</span>
-                    </button>
-                  </form>
-                )}
+                    <span>{isSubmitting ? '접수 중...' : '예약 문의 메일 발송하기'}</span>
+                  </button>
+                </form>
               </div>
             </div>
           </div>

@@ -3,30 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
-import {
-  AlertCircle,
-  ArrowDownRight,
-  CheckCircle2,
-  ExternalLink,
-  Loader2,
-  Mail,
-  Menu,
-  X,
-} from 'lucide-react';
-import type { User } from 'firebase/auth';
+import React, { useMemo, useState } from 'react';
+import { ArrowDownRight, CheckCircle2, Loader2, Menu, X } from 'lucide-react';
 import { Coastal3DStage } from './components/Coastal3DStage';
 import { EditorialImage } from './components/EditorialImage';
-import {
-  buildReservationMailtoUrl,
-  formatGmailAuthError,
-  GmailAuthErrorInfo,
-  initGmailAuth,
-  RESERVATION_RECIPIENT,
-  sendReservationEmail,
-  signInWithGoogleForGmail,
-  signOutGmail,
-} from './services/gmailAuth';
 import {
   EQUIPMENT_ITEMS,
   EquipmentCategory,
@@ -46,6 +26,8 @@ interface ReservationFormState {
   guests: string;
   note: string;
 }
+
+const FORMSPREE_ENDPOINT = 'https://formspree.io/f/xvkabgbp';
 
 const INITIAL_FORM: ReservationFormState = {
   name: '',
@@ -69,32 +51,10 @@ export default function App() {
 
   const [form, setForm] = useState<ReservationFormState>(INITIAL_FORM);
   const [formError, setFormError] = useState<string | null>(null);
-  const [authError, setAuthError] = useState<GmailAuthErrorInfo | null>(null);
-  const [needsForceConsent, setNeedsForceConsent] = useState(false);
-  const [gmailUser, setGmailUser] = useState<User | null>(null);
-  const [needsGmailAuth, setNeedsGmailAuth] = useState(true);
-  const [isSigningInGoogle, setIsSigningInGoogle] = useState(false);
-  const [pendingBooking, setPendingBooking] = useState<
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submittedBooking, setSubmittedBooking] = useState<
     (ReservationFormState & { bookingCode: string }) | null
   >(null);
-  const [isSendingEmail, setIsSendingEmail] = useState(false);
-  const [submittedBooking, setSubmittedBooking] = useState<
-    (ReservationFormState & { bookingCode: string; gmailMessageId: string }) | null
-  >(null);
-
-  useEffect(() => {
-    const unsubscribe = initGmailAuth(
-      (user) => {
-        setGmailUser(user);
-        setNeedsGmailAuth(false);
-      },
-      () => {
-        setGmailUser(null);
-        setNeedsGmailAuth(true);
-      }
-    );
-    return () => unsubscribe();
-  }, []);
 
   const filteredEquipment = useMemo(() => {
     if (equipmentFilter === 'all') return EQUIPMENT_ITEMS;
@@ -109,39 +69,13 @@ export default function App() {
     [selectedSeasonId]
   );
 
-  const handleGoogleSignIn = async () => {
-    setFormError(null);
-    setAuthError(null);
-    setIsSigningInGoogle(true);
-    try {
-      const result = await signInWithGoogleForGmail(needsForceConsent);
-      setGmailUser(result.user);
-      setNeedsGmailAuth(false);
-      setNeedsForceConsent(false);
-      setAuthError(null);
-    } catch (err) {
-      const formatted = formatGmailAuthError(err);
-      setAuthError(formatted);
-      if (formatted.code === 'auth/missing-access-token') {
-        setNeedsForceConsent(true);
-      }
-    } finally {
-      setIsSigningInGoogle(false);
-    }
-  };
-
-  const handleGoogleSignOut = async () => {
-    await signOutGmail();
-    setGmailUser(null);
-    setNeedsGmailAuth(true);
-    setPendingBooking(null);
-    setAuthError(null);
-  };
-
-  const handleFormSubmit = (e: React.FormEvent) => {
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     const trimmedName = form.name.trim();
     const trimmedContact = form.contact.trim();
+    const trimmedNote = form.note.trim();
 
     if (trimmedName.length < 2) {
       setFormError('신청자 성함을 2자 이상 입력해 주세요.');
@@ -160,73 +94,73 @@ export default function App() {
       return;
     }
 
-    if (needsGmailAuth) {
-      setFormError(
-        `${RESERVATION_RECIPIENT}으로 예약 메일을 발송하려면 먼저 상단의 'Sign in with Google' 버튼으로 Google 계정을 연결해 주세요.`
-      );
-      return;
-    }
-
     setFormError(null);
+    setIsSubmitting(true);
+
     const codeSuffix = String(Math.floor(1000 + Math.random() * 9000));
-    setPendingBooking({
-      ...form,
+    const bookingCode = `JH-${form.date.replace(/-/g, '').slice(2)}-${codeSuffix}`;
+
+    const payload: Record<string, string> = {
+      _subject: `[제주 해녀 아카이브] 체험 예약 문의 — ${trimmedName} (${bookingCode})`,
+      bookingCode,
       name: trimmedName,
       contact: trimmedContact,
-      bookingCode: `JH-${form.date.replace(/-/g, '').slice(2)}-${codeSuffix}`,
-    });
-  };
+      program: form.program,
+      date: form.date,
+      guests: `${form.guests}명`,
+      note: trimmedNote || '(없음)',
+    };
 
-  const handleConfirmSendEmail = async () => {
-    if (!pendingBooking) return;
-    setIsSendingEmail(true);
-    setFormError(null);
+    if (isEmail) {
+      payload.email = trimmedContact;
+    }
+
     try {
-      const sent = await sendReservationEmail(pendingBooking);
-      setSubmittedBooking({
-        ...pendingBooking,
-        gmailMessageId: sent.id,
+      const response = await fetch(FORMSPREE_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(payload),
       });
-      setPendingBooking(null);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : '';
-      if (message === 'AUTH_REQUIRED' || message === 'GMAIL_SCOPE_REQUIRED') {
-        setNeedsGmailAuth(true);
-        setGmailUser(null);
-        setPendingBooking(null);
-        if (message === 'GMAIL_SCOPE_REQUIRED') {
-          setNeedsForceConsent(true);
-          setAuthError({
-            code: 'gmail/insufficient-scope',
-            message: 'Gmail 메일 발송 권한이 허용되지 않았습니다.',
-            hint: '다시 "Sign in with Google"을 눌러 권한 동의 화면에서 이메일 전송 항목을 허용해 주세요.',
-            showNewTabAction: false,
-            showMailtoFallback: true,
-          });
-        } else {
-          setAuthError({
-            code: 'auth/session-expired',
-            message: 'Gmail 인증 세션이 만료되었습니다. Google 계정으로 다시 로그인해 주세요.',
-            showNewTabAction: false,
-            showMailtoFallback: true,
-          });
+
+      if (!response.ok) {
+        let errorMessage = '예약 문의 전송에 실패했습니다. 잠시 후 다시 시도해 주세요.';
+        try {
+          const data = (await response.json()) as {
+            errors?: Array<{ message?: string }>;
+            error?: string;
+          };
+          const detail = data.errors?.map((item) => item.message).filter(Boolean).join(', ') || data.error;
+          if (detail) {
+            errorMessage = `예약 문의 전송에 실패했습니다 (${detail}).`;
+          }
+        } catch {
+          // Fallback to generic error message if response is not JSON
         }
-      } else {
-        setFormError(
-          '이메일 발송 중 오류가 발생했습니다. 네트워크 연결과 Gmail 권한을 확인 후 다시 시도해 주세요.'
-        );
+        setFormError(errorMessage);
+        return;
       }
+
+      setSubmittedBooking({
+        ...form,
+        name: trimmedName,
+        contact: trimmedContact,
+        note: trimmedNote,
+        bookingCode,
+      });
+    } catch {
+      setFormError('네트워크 오류가 발생했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.');
     } finally {
-      setIsSendingEmail(false);
+      setIsSubmitting(false);
     }
   };
 
   const handleResetBooking = () => {
     setSubmittedBooking(null);
-    setPendingBooking(null);
     setForm(INITIAL_FORM);
     setFormError(null);
-    setAuthError(null);
   };
 
   return (
@@ -786,148 +720,27 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Right Column: Validated Interactive Experience Booking Form with Gmail Delivery */}
+              {/* Right Column: Validated Interactive Experience Booking Form via Formspree */}
               <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 sm:p-8">
                 <h3 className="font-editorial text-xl font-bold text-slate-900">
                   해녀 문화 체험 · 해설 예약 문의
                 </h3>
                 <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-                  희망하는 프로그램과 방문 일정을 작성하시면{' '}
-                  <span className="font-mono-tabular text-slate-800 font-medium">
-                    {RESERVATION_RECIPIENT}
-                  </span>
-                  으로 예약 문의 메일이 발송됩니다.
+                  희망하는 프로그램과 방문 일정을 입력해 주시면 물때와 기상 상황을 확인한 뒤
+                  안내드리겠습니다.
                 </p>
-
-                {/* Google Sign-In Status & Official Sign-In Button for Gmail Sending */}
-                <div className="mt-4 pt-4 border-t border-slate-100">
-                  {needsGmailAuth ? (
-                    <div className="flex flex-col gap-2.5">
-                      <p className="text-xs text-slate-500">
-                        Gmail로 예약 문의 메일을 발송하려면 Google 계정 연결이 필요합니다.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={handleGoogleSignIn}
-                        disabled={isSigningInGoogle}
-                        className="inline-flex items-center justify-center gap-2.5 w-full py-2.5 px-4 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-sm font-medium shadow-2xs transition-colors cursor-pointer disabled:opacity-60"
-                      >
-                        <svg
-                          className="w-4 h-4 shrink-0"
-                          viewBox="0 0 48 48"
-                          aria-hidden="true"
-                        >
-                          <path
-                            fill="#EA4335"
-                            d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
-                          />
-                          <path
-                            fill="#4285F4"
-                            d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
-                          />
-                          <path
-                            fill="#FBBC05"
-                            d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
-                          />
-                          <path
-                            fill="#34A853"
-                            d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
-                          />
-                        </svg>
-                        <span>
-                          {isSigningInGoogle ? 'Google 연결 중...' : 'Sign in with Google'}
-                        </span>
-                      </button>
-
-                      {authError && (
-                        <div
-                          role="alert"
-                          className="rounded-lg border border-red-200 bg-red-50/90 p-3 text-xs text-red-900 space-y-2"
-                        >
-                          <div className="flex items-start gap-2">
-                            <AlertCircle
-                              className="w-4 h-4 text-red-600 shrink-0 mt-0.5"
-                              aria-hidden="true"
-                            />
-                            <div className="min-w-0 space-y-1">
-                              <p className="font-semibold leading-snug break-keep">
-                                {authError.message}
-                              </p>
-                              {authError.hint && (
-                                <p className="text-red-800/90 leading-relaxed break-keep">
-                                  {authError.hint}
-                                </p>
-                              )}
-                              <p className="font-mono-tabular text-[11px] text-red-700/80">
-                                오류 코드: {authError.code}
-                              </p>
-                            </div>
-                          </div>
-
-                          {(authError.showNewTabAction || authError.showMailtoFallback) && (
-                            <div className="flex flex-wrap items-center gap-2 pt-1 pl-6">
-                              {authError.showNewTabAction && (
-                                <a
-                                  href={
-                                    typeof window !== 'undefined'
-                                      ? window.location.href
-                                      : '#visit'
-                                  }
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white border border-red-200 hover:bg-red-100/60 text-red-900 font-medium transition-colors"
-                                >
-                                  <span>새 탭에서 열기</span>
-                                  <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                                </a>
-                              )}
-                              {authError.showMailtoFallback && (
-                                <a
-                                  href={buildReservationMailtoUrl(form)}
-                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#0E5A6F] hover:bg-[#0b4859] text-white font-medium transition-colors"
-                                >
-                                  <Mail className="w-3 h-3" aria-hidden="true" />
-                                  <span>기본 메일 앱으로 바로 보내기</span>
-                                </a>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between gap-3 text-xs text-slate-600">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <Mail className="w-3.5 h-3.5 text-[#0E5A6F] shrink-0" aria-hidden="true" />
-                        <span className="truncate">
-                          발신 계정: <strong className="font-medium text-slate-900">{gmailUser?.email}</strong>
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleGoogleSignOut}
-                        className="text-slate-500 hover:text-slate-900 underline underline-offset-2 whitespace-nowrap shrink-0 cursor-pointer"
-                      >
-                        연결 해제
-                      </button>
-                    </div>
-                  )}
-                </div>
 
                 {submittedBooking ? (
                   <div className="mt-6 rounded-lg bg-[#F8FAFC] border border-slate-200 p-6">
                     <div className="flex items-center gap-2.5 text-[#0E5A6F]">
                       <CheckCircle2 className="w-5 h-5 shrink-0" aria-hidden="true" />
                       <h4 className="font-semibold text-base text-slate-900">
-                        예약 문의 메일이 발송되었습니다
+                        예약 문의가 정상 접수되었습니다.
                       </h4>
                     </div>
                     <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-                      <span className="font-mono-tabular text-slate-800">
-                        {RESERVATION_RECIPIENT}
-                      </span>
-                      으로 예약 문의 내용이 정상 전달되었습니다. 물때와 기상 상황을 확인한 뒤
-                      회신드리겠습니다.
+                      입력하신 내용으로 예약 문의가 정상 전달되었습니다. 물때와 기상 상황을 확인한 뒤
+                      남겨주신 연락처로 회신드리겠습니다.
                     </p>
 
                     <dl className="mt-5 pt-4 border-t border-slate-200 space-y-2.5 text-sm">
@@ -938,14 +751,12 @@ export default function App() {
                         </dd>
                       </div>
                       <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">수신 메일</dt>
-                        <dd className="font-mono-tabular text-slate-900">
-                          {RESERVATION_RECIPIENT}
-                        </dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
                         <dt className="text-slate-500">신청자</dt>
                         <dd className="text-slate-900 font-medium">{submittedBooking.name}</dd>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-slate-500">연락처</dt>
+                        <dd className="text-slate-900">{submittedBooking.contact}</dd>
                       </div>
                       <div className="flex justify-between gap-4">
                         <dt className="text-slate-500">프로그램</dt>
@@ -1095,92 +906,15 @@ export default function App() {
 
                     <button
                       type="submit"
-                      className="w-full py-3 px-4 rounded-lg bg-[#0E5A6F] hover:bg-[#0b4859] text-white text-sm font-semibold transition-colors cursor-pointer"
+                      disabled={isSubmitting}
+                      className="inline-flex items-center justify-center gap-2 w-full py-3 px-4 rounded-lg bg-[#0E5A6F] hover:bg-[#0b4859] text-white text-sm font-semibold transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      예약 문의 메일 발송하기
+                      {isSubmitting && (
+                        <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                      )}
+                      <span>{isSubmitting ? '발송 중...' : '예약 문의 메일 발송하기'}</span>
                     </button>
                   </form>
-                )}
-
-                {/* Mandatory Explicit User Confirmation Modal Before Sending Gmail */}
-                {pendingBooking && (
-                  <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4"
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="confirm-email-title"
-                  >
-                    <div className="w-full max-w-md rounded-xl bg-white border border-slate-200 p-6 shadow-2xl">
-                      <h4
-                        id="confirm-email-title"
-                        className="font-editorial text-lg font-bold text-slate-900"
-                      >
-                        예약 문의 이메일을 발송하시겠습니까?
-                      </h4>
-                      <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-                        아래 내용으로 연결된 Gmail 계정에서{' '}
-                        <strong className="font-mono-tabular text-slate-900">
-                          {RESERVATION_RECIPIENT}
-                        </strong>
-                        으로 이메일을 전송합니다.
-                      </p>
-
-                      <dl className="mt-4 pt-4 border-t border-slate-200 space-y-2 text-xs sm:text-sm">
-                        <div className="flex justify-between gap-3">
-                          <dt className="text-slate-500 shrink-0">받는 사람</dt>
-                          <dd className="font-mono-tabular text-slate-900 font-medium">
-                            {RESERVATION_RECIPIENT}
-                          </dd>
-                        </div>
-                        <div className="flex justify-between gap-3">
-                          <dt className="text-slate-500 shrink-0">신청자</dt>
-                          <dd className="text-slate-900 font-medium">{pendingBooking.name}</dd>
-                        </div>
-                        <div className="flex justify-between gap-3">
-                          <dt className="text-slate-500 shrink-0">연락처</dt>
-                          <dd className="text-slate-800">{pendingBooking.contact}</dd>
-                        </div>
-                        <div className="flex justify-between gap-3">
-                          <dt className="text-slate-500 shrink-0">프로그램</dt>
-                          <dd className="text-slate-900 text-right">{pendingBooking.program}</dd>
-                        </div>
-                        <div className="flex justify-between gap-3">
-                          <dt className="text-slate-500 shrink-0">방문 일정</dt>
-                          <dd className="font-mono-tabular text-slate-900">
-                            {pendingBooking.date} · {pendingBooking.guests}명
-                          </dd>
-                        </div>
-                      </dl>
-
-                      {formError && (
-                        <p role="alert" className="mt-3 text-xs font-medium text-red-700">
-                          {formError}
-                        </p>
-                      )}
-
-                      <div className="mt-6 flex items-center justify-end gap-2.5">
-                        <button
-                          type="button"
-                          disabled={isSendingEmail}
-                          onClick={() => setPendingBooking(null)}
-                          className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-100 text-slate-700 text-sm font-medium transition-colors cursor-pointer disabled:opacity-50"
-                        >
-                          취소
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isSendingEmail}
-                          onClick={handleConfirmSendEmail}
-                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0E5A6F] hover:bg-[#0b4859] text-white text-sm font-semibold transition-colors cursor-pointer disabled:opacity-60"
-                        >
-                          {isSendingEmail && (
-                            <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                          )}
-                          <span>{isSendingEmail ? '메일 발송 중...' : '확인 및 메일 발송'}</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
                 )}
               </div>
             </div>

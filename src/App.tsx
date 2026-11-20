@@ -4,11 +4,23 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowDownRight, CheckCircle2, Loader2, Mail, Menu, X } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowDownRight,
+  CheckCircle2,
+  ExternalLink,
+  Loader2,
+  Mail,
+  Menu,
+  X,
+} from 'lucide-react';
 import type { User } from 'firebase/auth';
 import { Coastal3DStage } from './components/Coastal3DStage';
 import { EditorialImage } from './components/EditorialImage';
 import {
+  buildReservationMailtoUrl,
+  formatGmailAuthError,
+  GmailAuthErrorInfo,
   initGmailAuth,
   RESERVATION_RECIPIENT,
   sendReservationEmail,
@@ -57,6 +69,8 @@ export default function App() {
 
   const [form, setForm] = useState<ReservationFormState>(INITIAL_FORM);
   const [formError, setFormError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<GmailAuthErrorInfo | null>(null);
+  const [needsForceConsent, setNeedsForceConsent] = useState(false);
   const [gmailUser, setGmailUser] = useState<User | null>(null);
   const [needsGmailAuth, setNeedsGmailAuth] = useState(true);
   const [isSigningInGoogle, setIsSigningInGoogle] = useState(false);
@@ -97,13 +111,20 @@ export default function App() {
 
   const handleGoogleSignIn = async () => {
     setFormError(null);
+    setAuthError(null);
     setIsSigningInGoogle(true);
     try {
-      const result = await signInWithGoogleForGmail();
+      const result = await signInWithGoogleForGmail(needsForceConsent);
       setGmailUser(result.user);
       setNeedsGmailAuth(false);
-    } catch {
-      setFormError('Google 로그인 또는 Gmail 발송 권한 동의가 취소되었습니다. 다시 시도해 주세요.');
+      setNeedsForceConsent(false);
+      setAuthError(null);
+    } catch (err) {
+      const formatted = formatGmailAuthError(err);
+      setAuthError(formatted);
+      if (formatted.code === 'auth/missing-access-token') {
+        setNeedsForceConsent(true);
+      }
     } finally {
       setIsSigningInGoogle(false);
     }
@@ -114,6 +135,7 @@ export default function App() {
     setGmailUser(null);
     setNeedsGmailAuth(true);
     setPendingBooking(null);
+    setAuthError(null);
   };
 
   const handleFormSubmit = (e: React.FormEvent) => {
@@ -168,11 +190,27 @@ export default function App() {
       setPendingBooking(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : '';
-      if (message === 'AUTH_REQUIRED') {
+      if (message === 'AUTH_REQUIRED' || message === 'GMAIL_SCOPE_REQUIRED') {
         setNeedsGmailAuth(true);
         setGmailUser(null);
         setPendingBooking(null);
-        setFormError('Gmail 인증 세션이 만료되었습니다. Google 계정으로 다시 로그인해 주세요.');
+        if (message === 'GMAIL_SCOPE_REQUIRED') {
+          setNeedsForceConsent(true);
+          setAuthError({
+            code: 'gmail/insufficient-scope',
+            message: 'Gmail 메일 발송 권한이 허용되지 않았습니다.',
+            hint: '다시 "Sign in with Google"을 눌러 권한 동의 화면에서 이메일 전송 항목을 허용해 주세요.',
+            showNewTabAction: false,
+            showMailtoFallback: true,
+          });
+        } else {
+          setAuthError({
+            code: 'auth/session-expired',
+            message: 'Gmail 인증 세션이 만료되었습니다. Google 계정으로 다시 로그인해 주세요.',
+            showNewTabAction: false,
+            showMailtoFallback: true,
+          });
+        }
       } else {
         setFormError(
           '이메일 발송 중 오류가 발생했습니다. 네트워크 연결과 Gmail 권한을 확인 후 다시 시도해 주세요.'
@@ -188,6 +226,7 @@ export default function App() {
     setPendingBooking(null);
     setForm(INITIAL_FORM);
     setFormError(null);
+    setAuthError(null);
   };
 
   return (
@@ -799,6 +838,62 @@ export default function App() {
                           {isSigningInGoogle ? 'Google 연결 중...' : 'Sign in with Google'}
                         </span>
                       </button>
+
+                      {authError && (
+                        <div
+                          role="alert"
+                          className="rounded-lg border border-red-200 bg-red-50/90 p-3 text-xs text-red-900 space-y-2"
+                        >
+                          <div className="flex items-start gap-2">
+                            <AlertCircle
+                              className="w-4 h-4 text-red-600 shrink-0 mt-0.5"
+                              aria-hidden="true"
+                            />
+                            <div className="min-w-0 space-y-1">
+                              <p className="font-semibold leading-snug break-keep">
+                                {authError.message}
+                              </p>
+                              {authError.hint && (
+                                <p className="text-red-800/90 leading-relaxed break-keep">
+                                  {authError.hint}
+                                </p>
+                              )}
+                              <p className="font-mono-tabular text-[11px] text-red-700/80">
+                                오류 코드: {authError.code}
+                              </p>
+                            </div>
+                          </div>
+
+                          {(authError.showNewTabAction || authError.showMailtoFallback) && (
+                            <div className="flex flex-wrap items-center gap-2 pt-1 pl-6">
+                              {authError.showNewTabAction && (
+                                <a
+                                  href={
+                                    typeof window !== 'undefined'
+                                      ? window.location.href
+                                      : '#visit'
+                                  }
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white border border-red-200 hover:bg-red-100/60 text-red-900 font-medium transition-colors"
+                                >
+                                  <span>새 탭에서 열기</span>
+                                  <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                                </a>
+                              )}
+                              {authError.showMailtoFallback && (
+                                <a
+                                  href={buildReservationMailtoUrl(form)}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#0E5A6F] hover:bg-[#0b4859] text-white font-medium transition-colors"
+                                >
+                                  <Mail className="w-3 h-3" aria-hidden="true" />
+                                  <span>기본 메일 앱으로 바로 보내기</span>
+                                </a>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="flex items-center justify-between gap-3 text-xs text-slate-600">

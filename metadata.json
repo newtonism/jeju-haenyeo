@@ -1,0 +1,6 @@
+{
+  "name": "Horangi Coastal Ride",
+  "description": "An interactive 3D Three.js scene of a cute Korean tiger riding a bicycle along a scenic Korean coastal road.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

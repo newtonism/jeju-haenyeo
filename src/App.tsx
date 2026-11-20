@@ -702,26 +702,6 @@ export default function App() {
                   안내드리겠습니다.
                 </p>
 
-                {submitSuccess && (
-                  <div
-                    role="status"
-                    className="mt-5 flex items-start gap-2.5 rounded-lg border border-[#0E5A6F]/25 bg-[#0E5A6F]/8 p-4 text-sm text-slate-800"
-                  >
-                    <CheckCircle2
-                      className="w-5 h-5 text-[#0E5A6F] shrink-0 mt-0.5"
-                      aria-hidden="true"
-                    />
-                    <div className="min-w-0">
-                      <p className="font-semibold text-slate-900">
-                        예약 문의가 정상적으로 접수되었습니다.
-                      </p>
-                      <p className="mt-1 text-xs text-slate-600 leading-relaxed">
-                        물때와 기상 상황을 확인한 뒤 남겨주신 연락처로 회신드리겠습니다.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
                 <form onSubmit={handleFormSubmit} className="mt-5 space-y-4" noValidate>
                   <div>
                     <label htmlFor="booking-name" className="block text-xs font-medium text-slate-700">
@@ -843,6 +823,26 @@ export default function App() {
                     <p role="alert" className="text-xs font-medium text-red-700 leading-relaxed">
                       {formError}
                     </p>
+                  )}
+
+                  {submitSuccess && (
+                    <div
+                      role="status"
+                      className="flex items-start gap-2.5 rounded-lg border border-[#0E5A6F]/25 bg-[#0E5A6F]/8 p-4 text-sm text-slate-800"
+                    >
+                      <CheckCircle2
+                        className="w-5 h-5 text-[#0E5A6F] shrink-0 mt-0.5"
+                        aria-hidden="true"
+                      />
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-900">
+                          예약 문의가 정상적으로 접수되었습니다.
+                        </p>
+                        <p className="mt-1 text-xs text-slate-600 leading-relaxed">
+                          물때와 기상 상황을 확인한 뒤 남겨주신 연락처로 회신드리겠습니다.
+                        </p>
+                      </div>
+                    </div>
                   )}
 
                   <button

@@ -27,8 +27,8 @@ interface ReservationFormState {
   note: string;
 }
 
-const APPS_SCRIPT_ENDPOINT =
-  'https://script.google.com/macros/s/AKfycbwaZh0td9E5nHBI2UOJDNv-OogGyEvTpObddv8wFFTTeJWWQ2c7na2A5VtDeol6wf8a/exec';
+const RESERVATION_RECIPIENT = 'jejudoremi@gmail.com';
+const FORMSUBMIT_ENDPOINT = `https://formsubmit.co/ajax/${RESERVATION_RECIPIENT}`;
 
 const INITIAL_FORM: ReservationFormState = {
   name: '',
@@ -53,7 +53,10 @@ export default function App() {
   const [form, setForm] = useState<ReservationFormState>(INITIAL_FORM);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [submitNotice, setSubmitNotice] = useState<{
+    title: string;
+    detail: string;
+  } | null>(null);
 
   const filteredEquipment = useMemo(() => {
     if (equipmentFilter === 'all') return EQUIPMENT_ITEMS;
@@ -73,8 +76,8 @@ export default function App() {
     value: ReservationFormState[K]
   ) => {
     setForm((prev) => ({ ...prev, [key]: value }));
-    if (submitSuccess) {
-      setSubmitSuccess(false);
+    if (submitNotice) {
+      setSubmitNotice(null);
     }
   };
 
@@ -104,30 +107,68 @@ export default function App() {
     }
 
     setFormError(null);
-    setSubmitSuccess(false);
+    setSubmitNotice(null);
     setIsSubmitting(true);
 
-    const payload = {
-      name: trimmedName,
-      contact: trimmedContact,
-      program: form.program,
-      date: form.date,
-      guests: form.guests,
-      message: trimmedMessage,
+    const codeSuffix = String(Math.floor(1000 + Math.random() * 9000));
+    const bookingCode = `JH-${form.date.replace(/-/g, '').slice(2)}-${codeSuffix}`;
+
+    const payload: Record<string, string> = {
+      _subject: `[제주 해녀 아카이브] 체험 예약 문의 — ${trimmedName} (${bookingCode})`,
+      _template: 'table',
+      _captcha: 'false',
+      접수번호: bookingCode,
+      신청자성함: trimmedName,
+      연락처: trimmedContact,
+      희망프로그램: form.program,
+      방문희망일: form.date,
+      참여인원: `${form.guests}명`,
+      추가요청사항: trimmedMessage || '(없음)',
     };
 
+    if (isEmail) {
+      payload._replyto = trimmedContact;
+    }
+
     try {
-      await fetch(APPS_SCRIPT_ENDPOINT, {
+      const response = await fetch(FORMSUBMIT_ENDPOINT, {
         method: 'POST',
-        mode: 'no-cors',
         headers: {
-          'Content-Type': 'text/plain;charset=utf-8',
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
         },
         body: JSON.stringify(payload),
       });
 
+      const data = (await response.json().catch(() => ({}))) as {
+        success?: boolean | string;
+        message?: string;
+      };
+
+      const rawMessage = data.message ?? '';
+      if (/activat/i.test(rawMessage)) {
+        setSubmitNotice({
+          title: '최초 1회 수신 이메일 인증이 필요합니다.',
+          detail: `${RESERVATION_RECIPIENT}으로 인증 메일이 발송되었습니다. 받은편지함(또는 스팸함)에서 'Activate Form'을 한 번 클릭해 활성화하시면 이후 모든 예약 문의가 바로 도착합니다.`,
+        });
+        return;
+      }
+
+      const isSucceeded = response.ok && (data.success === true || data.success === 'true');
+      if (!isSucceeded) {
+        setFormError(
+          rawMessage
+            ? `메일 발송에 실패했습니다 (${rawMessage}).`
+            : '예약 문의 메일 발송에 실패했습니다. 잠시 후 다시 시도해 주세요.'
+        );
+        return;
+      }
+
       setForm(INITIAL_FORM);
-      setSubmitSuccess(true);
+      setSubmitNotice({
+        title: '예약 문의가 정상적으로 접수되었습니다.',
+        detail: `${RESERVATION_RECIPIENT}으로 예약 문의 메일이 발송되었습니다. 물때와 기상 상황을 확인한 뒤 남겨주신 연락처로 회신드리겠습니다.`,
+      });
     } catch {
       setFormError('네트워크 오류가 발생했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.');
     } finally {
@@ -692,14 +733,17 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Right Column: Validated Interactive Experience Booking Form via Google Apps Script */}
+              {/* Right Column: Validated Interactive Experience Booking Form via FormSubmit */}
               <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 sm:p-8">
                 <h3 className="font-editorial text-xl font-bold text-slate-900">
                   해녀 문화 체험 · 해설 예약 문의
                 </h3>
                 <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-                  희망하는 프로그램과 방문 일정을 입력해 주시면 물때와 기상 상황을 확인한 뒤
-                  안내드리겠습니다.
+                  희망하는 프로그램과 방문 일정을 입력하시면{' '}
+                  <span className="font-mono-tabular font-medium text-slate-800">
+                    {RESERVATION_RECIPIENT}
+                  </span>
+                  으로 예약 문의 메일이 발송됩니다.
                 </p>
 
                 <form onSubmit={handleFormSubmit} className="mt-5 space-y-4" noValidate>
@@ -825,7 +869,7 @@ export default function App() {
                     </p>
                   )}
 
-                  {submitSuccess && (
+                  {submitNotice && (
                     <div
                       role="status"
                       className="flex items-start gap-2.5 rounded-lg border border-[#0E5A6F]/25 bg-[#0E5A6F]/8 p-4 text-sm text-slate-800"
@@ -835,11 +879,11 @@ export default function App() {
                         aria-hidden="true"
                       />
                       <div className="min-w-0">
-                        <p className="font-semibold text-slate-900">
-                          예약 문의가 정상적으로 접수되었습니다.
+                        <p className="font-semibold text-slate-900 break-keep">
+                          {submitNotice.title}
                         </p>
-                        <p className="mt-1 text-xs text-slate-600 leading-relaxed">
-                          물때와 기상 상황을 확인한 뒤 남겨주신 연락처로 회신드리겠습니다.
+                        <p className="mt-1 text-xs text-slate-600 leading-relaxed break-keep">
+                          {submitNotice.detail}
                         </p>
                       </div>
                     </div>
